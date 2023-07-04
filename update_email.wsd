@@ -118,7 +118,16 @@
     alt all service updated
       userComposite --> personalInfo ++: PUT /internal/update-history/:historyId/status
       personalInfo --> userComposite --: return history
-      userComposite --> event : publish event : usercomposite_events.UserUpdateHistorySendEmail
+      userComposite --> event ++: publish event : usercomposite_events.UserUpdateHistorySendEmail
+      event --> userComposite --: consume event : usercomposite_events.UserUpdateHistorySendEmail
+      create participant "Email Service" as emailService
+      userComposite --> emailService ++: POST /internal/send
+      emailService --> userComposite : return result
+      alt email sends success
+        emailService --> userComposite : consume event : usercomposite_events.UpdateEmailSendingHistoryWhenEmailSendingSuccess
+      else email sends fail
+        emailService --> userComposite --: consume event : usercomposite_events.UpdateEmailSendingHistoryWhenEmailSendingFailed
+      end
     else all service not updated
       userComposite --> userComposite --: do nothing
     end
