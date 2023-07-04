@@ -1,0 +1,32 @@
+@startuml get pending update
+  skinparam backgroundColor white
+
+  participant "Client" as client
+  participant "user-composite service" as userComposite
+  participant "personal-info service" as personalInfo
+
+  == Get pending update ==
+    client -> userComposite ++: GET /secure/user/personal-info/update-history/pending
+
+    userComposite --> personalInfo ++: GET /internal/update-history/{userID}/pending
+    personalInfo --> userComposite --: return result
+
+    userComposite -> client --: return result
+    note right client
+    {
+      "data": {
+        "mobileNumber": false,
+        "email": false,
+        "addresses": true //--> disable update
+      }
+    }
+    end note
+
+  == TODO ==
+  note over userComposite
+    - Resend email
+    - ETL get history(status : ACCEPTED) and rerun fail service
+    - ***Reverse info by history id
+  end note
+
+@enduml

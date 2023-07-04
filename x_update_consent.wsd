@@ -1,0 +1,118 @@
+@startuml update consent flow
+  skinparam backgroundColor white
+
+  participant "Client" as client
+  participant "user-composite service" as userComposite
+  participant "personal-info service" as personalInfo
+  participant "KKP" as KKP
+  queue "event" as event
+
+  group get consent from KKP
+    client -> userComposite ++: GET ... user consent **(NEW API)**
+    userComposite --> KKP ++: inquiry consent **(NEW API)**
+    KKP --> userComposite --: return result
+    userComposite -> client --: return consent
+  end
+
+  group update consent
+    client -> userComposite ++: POST /secure/consents **(NEW API)**
+    note right client
+      [
+        {
+          "productType": "...",
+          "version": "...",
+          "action": "..."
+        },{
+          "productType": "...",
+          "version": "...",
+          "action": "..."
+        },...
+      ]
+    end note
+
+    userComposite --> personalInfo ++: POST /internal/update-history
+    note right userComposite
+      {
+        "type": "CONSENT",
+        "destination": "[{'productType': '...','version': '...', 'action': '...'}]",
+      }
+    end note
+    personalInfo --> userComposite --: return history result
+
+    userComposite -> client --: return refId **(history_id)**
+  end
+
+  group verify pin
+    client -> userComposite ++: POST /secure/pin/verify
+    userComposite --> userComposite : validate pin
+
+    alt on Success
+      userComposite --> event : publish event : usercomposite_events.VerifyPinSuccess
+      userComposite -> client : return success
+    else on exceed limit Fail
+      userComposite --> event : publish event : usercomposite_events.VerifyPinFailed
+      userComposite -> client --: return error
+    end
+  end
+
+  group VerifyPinSuccess
+    event --> userComposite ++: consume event : usercomposite_events.VerifyPinSuccess
+
+    create participant "user-profile service" as userprofile
+    loop
+      userComposite --> userprofile ++: POST /internal/consent (userProfileService.UpdateConsentWithBody)
+      userprofile --> userComposite --: return result
+    end
+
+    userComposite --> personalInfo ++: PUT /internal/update-history/:historyId/status
+    personalInfo --> userComposite --: return result
+
+    userComposite --> event --: publish event : usercomposite_events.UserUpdateHistoryAccepted
+  end
+
+  group Update consent all services
+    event --> userComposite ++: consume event : usercomposite_events.UserUpdateHistoryAccepted
+
+    userComposite --> KKP ++: call kkp api **(NEW API)**
+    KKP --> userComposite --: return result
+
+    userComposite --> event --: publish event : usercomposite_events.UserUpdateHistoryUpdated
+    note left event
+      {
+        ...
+        "service": "USER_COMPOSITE_KKP_CONSENT",
+        ...
+      }
+    end note
+  end
+
+  group usercomposite_events.UserUpdateHistoryUpdated
+    event --> userComposite ++ : consume event : usercomposite_events.UserUpdateHistoryUpdated
+
+    userComposite --> personalInfo ++: PUT /internal/update-history-result/:historyId/status
+    personalInfo --> userComposite --: return history
+
+    alt all service updated
+      userComposite --> personalInfo ++: PUT /internal/update-history/:historyId/status
+      personalInfo --> userComposite --: return history
+      userComposite --> event : publish event : usercomposite_events.UserUpdateHistorySendEmail
+    else all service not updated
+      userComposite --> userComposite --: do nothing
+    end
+  end
+
+  == services ==
+  note right userComposite
+     user-composite -> USER_COMPOSITE_KKP_CONSENT
+  end note
+
+  note right userComposite
+    {
+      "user_update_history_id": "{{UUID}}",
+      "user_id": "{{USER_ID}}",
+      "service": "USER_COMPOSITE_KKP_CONSENT",
+      "result": "SUCCESS"
+    }
+  end note
+
+@enduml

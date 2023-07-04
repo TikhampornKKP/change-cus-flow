@@ -1,0 +1,158 @@
+@startuml update email flow
+  skinparam backgroundColor white
+
+  participant "Client" as client
+  participant "user-composite service" as userComposite
+  participant "personal-info service" as personalInfo
+  queue "event" as event
+
+  group verify OTP via email
+    client -> userComposite ++: POST /secure/user/personal-info/email/request-otp
+    userComposite -> client --: return RequestOTPResp
+
+    client -> userComposite ++: POST /secure/user/personal-info/email/verify-otp
+    userComposite -> client --: return VerifyOTPResp
+  end
+
+  group update email
+    client -> userComposite ++: PUT /secure/user/personal-info/email
+    userComposite --> personalInfo ++: POST /internal/update-history
+    personalInfo --> userComposite --: return history result
+    userComposite -> client --: return refId **(history_id)**
+  end
+
+  group verify pin
+    client -> userComposite ++: POST /secure/pin/verify
+    userComposite --> userComposite : validate pin
+
+    alt on Success
+      userComposite --> event : publish event : usercomposite_events.VerifyPinSuccess
+      userComposite -> client : return success
+    else on exceed limit Fail
+      userComposite --> event : publish event : usercomposite_events.VerifyPinFailed
+      userComposite -> client --: return error
+    end
+  end
+
+  group VerifyPinSuccess
+    event --> userComposite ++: consume event : usercomposite_events.VerifyPinSuccess
+
+    userComposite --> personalInfo ++: PATCH /internal/personal-info/{userID}/contact-info/email
+    personalInfo --> userComposite --: return result
+
+    create participant "user-profile service" as userProfile
+    userComposite --> userProfile ++: update hash email
+    userProfile --> userComposite --: return result
+
+    userComposite --> personalInfo ++: PUT /internal/update-history/:historyId/status
+    personalInfo --> userComposite --: return result
+
+    userComposite --> event --: publish event : usercomposite_events.UserUpdateHistoryAccepted
+  end
+
+
+  group Update email all services
+  else update kkp
+    event --> userComposite ++: consume event : usercomposite_events.UserUpdateHistoryAccepted
+
+    create participant KKP
+    userComposite --> KKP ++: update KKP contact
+    KKP --> userComposite --: return result
+
+    userComposite --> event --: publish event : usercomposite_events.UserUpdateHistoryUpdated
+    note left event
+      {
+        ...
+        "service": "USER_COMPOSITE_KKP_CONTACT",
+        ...
+      }
+    end note
+
+  else update fund account
+    create participant "user-fund-account service" as fundAccount
+    event --> fundAccount ++: consume event : usercomposite_events.UserUpdateHistoryAccepted
+
+    create participant "FCN" as FCN
+    fundAccount --> FCN ++: update email
+    FCN --> fundAccount --: return result
+
+    fundAccount --> FCN ++: re generate doc and upload
+    FCN --> fundAccount --: return result
+
+    fundAccount --> event --: publish event : usercomposite_events.UserUpdateHistoryUpdated
+    note right event
+      {
+        ...
+        "service": "USER_FUND_ACCOUNT",
+        ...
+      }
+    end note
+
+  else update stock account
+    create participant "user-stock-account service" as stockAccount
+    event --> stockAccount ++: consume event : usercomposite_events.UserUpdateHistoryAccepted
+
+    stockAccount --> personalInfo ++: GET /internal/update-history/:historyId
+    personalInfo --> stockAccount --: return history
+
+    create participant "ALPACA" as ALPACA
+    stockAccount --> ALPACA ++: update email
+    ALPACA --> stockAccount --: return result
+
+    stockAccount --> event --: publish event : usercomposite_events.UserUpdateHistoryUpdated
+    note right event
+      {
+        ...
+        "service": "USER_STOCK_ACCOUNT",
+        ...
+      }
+    end note
+  end
+
+  group usercomposite_events.UserUpdateHistoryUpdated
+    event --> userComposite ++ : consume event : usercomposite_events.UserUpdateHistoryUpdated
+
+    userComposite --> personalInfo ++: PUT /internal/update-history-result/:historyId/status
+    personalInfo --> userComposite --: return history
+
+    alt all service updated
+      userComposite --> personalInfo ++: PUT /internal/update-history/:historyId/status
+      personalInfo --> userComposite --: return history
+      userComposite --> event : publish event : usercomposite_events.UserUpdateHistorySendEmail
+    else all service not updated
+      userComposite --> userComposite --: do nothing
+    end
+  end
+
+  == services ==
+  note right userComposite
+     user-composite -> USER_COMPOSITE_KKP_CONTACT
+     user-fund-account(FCN) -> USER_FUND_ACCOUNT
+     user-stock-account(ALPACA) -> USER_STOCK_ACCOUNT
+  end note
+
+  note right userComposite
+    ' user-composite
+    {
+      "user_update_history_id": "{{UUID}}",
+      "user_id": "{{USER_ID}}",
+      "service": "USER_COMPOSITE_KKP_CONTACT",
+      "result": "SUCCESS"
+    }
+    ' user-fund-account
+    {
+      "user_update_history_id": "{{UUID}}",
+      "user_id": "{{USER_ID}}",
+      "service": "USER_FUND_ACCOUNT",
+      "result": "SUCCESS"
+    }
+    ' user-stock-account
+    {
+      "user_update_history_id": "{{UUID}}",
+      "user_id": "{{USER_ID}}",
+      "service": "USER_STOCK_ACCOUNT",
+      "result": "SUCCESS"
+    }
+  end note
+
+@enduml

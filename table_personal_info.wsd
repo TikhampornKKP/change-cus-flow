@@ -1,0 +1,40 @@
+@startuml update personal info table
+  entity "user_update_histories" as history {
+    *id : uuid <<PK>>
+    --
+    *user_id : uuid
+    *type : varchar <<EMAIL | MOBILE_NUMBER | ADDRESSES(jsonString)>>
+    *original : text
+    *destination : text
+    *description : text
+    *status : varchar <<PENDING | ACCEPTED | SUCCESS | FAILED>>
+    *requested_by: varchar
+    *created_at : datetime
+    *updated_at : datetime
+  }
+
+  entity "user_update_results" as result {
+    *id : number <<PK>>
+    *user_update_history_id : uuid <<FK>>
+    --
+    *user_id : uuid <<NULL>>
+    *service : varchar <<ENUM>>
+    *status : varchar <<PROCESS | SUCCESS | FAILED>>
+    *created_at : datetime
+    *updated_at : datetime
+  }
+
+  history ||..o{ result
+
+  entity "email_sending_history" as emailHistory {
+    *id : uuid <<PK>>
+    --
+    *user_id : uuid
+    *request_id : uuid
+    *status : varchar
+    *type : varchar
+    *template_id : varchar
+    *created_at : datetime
+    *updated_at : datetime
+  }
+@enduml

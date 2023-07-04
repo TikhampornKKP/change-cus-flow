@@ -1,0 +1,91 @@
+@startuml update suitability flow
+  skinparam backgroundColor white
+
+  participant "Client" as client
+  participant "user-composite service" as userComposite
+  participant "personal-info service" as personalInfo
+  queue "event" as event
+
+  group update suitability
+    client -> userComposite ++: PATCH /internal/kyc-info/{userID}/suitability-result
+
+    userComposite --> personalInfo ++: POST /internal/update-history
+    note right userComposite
+      {
+        "type": "SUITABILITY_TEST",
+        "destination": "{'productType': '...','version': '...', 'action': '...'}",
+      }
+    end note
+    personalInfo --> userComposite --: return history result
+
+    userComposite -> client --: return refId **(history_id)**
+  end
+
+  group verify pin
+    client -> userComposite ++: POST /secure/pin/verify
+    userComposite --> userComposite : validate pin
+
+    alt on Success
+      userComposite --> event : publish event : usercomposite_events.VerifyPinSuccess
+      userComposite -> client : return success
+    else on exceed limit Fail
+      userComposite --> event : publish event : usercomposite_events.VerifyPinFailed
+      userComposite -> client --: return error
+    end
+  end
+
+  group VerifyPinSuccess
+    event --> userComposite ++: consume event : usercomposite_events.VerifyPinSuccess
+
+    userComposite --> personalInfo ++: PATCH /internal/kyc-info/:userId/suitability-result (personalInfoService.SaveSuitabilityResultWithBody)
+    personalInfo --> userComposite --: return result
+
+    userComposite --> personalInfo ++: PUT /internal/update-history/:historyId/status
+    personalInfo --> userComposite --: return result
+
+    userComposite --> event --: publish event : usercomposite_events.UserUpdateHistoryAccepted
+  end
+
+  group Update suitability all services
+    event --> userComposite ++: consume event : usercomposite_events.UserUpdateHistoryAccepted
+    userComposite --> event --: publish event : usercomposite_events.UserUpdateHistoryUpdated
+    note left event
+      {
+        ...
+        "service": "USER_COMPOSITE_SUITE_TEST",
+        ...
+      }
+    end note
+  end
+
+  group usercomposite_events.UserUpdateHistoryUpdated
+    event --> userComposite ++ : consume event : usercomposite_events.UserUpdateHistoryUpdated
+
+    userComposite --> personalInfo ++: PUT /internal/update-history-result/:historyId/status
+    personalInfo --> userComposite --: return history
+
+    alt all service updated
+      userComposite --> personalInfo ++: PUT /internal/update-history/:historyId/status
+      personalInfo --> userComposite --: return history
+      userComposite --> event : publish event : usercomposite_events.UserUpdateHistorySendEmail
+    else all service not updated
+      userComposite --> userComposite --: do nothing
+    end
+  end
+
+  == services ==
+  note right userComposite
+     user-composite -> USER_COMPOSITE_SUITE_TEST
+  end note
+
+  note right userComposite
+    {
+      "user_update_history_id": "{{UUID}}",
+      "user_id": "{{USER_ID}}",
+      "service": "USER_COMPOSITE_SUITE_TEST",
+      "result": "SUCCESS"
+    }
+  end note
+
+
+@enduml
